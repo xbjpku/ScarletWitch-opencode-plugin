@@ -1,0 +1,3 @@
+[submodule "scarletwitch"]
+	path = scarletwitch
+	url = https://github.com/xbjpku/ScarletWitch.git

@@ -1,0 +1,24 @@
+{
+  "name": "scarletwitch-opencode",
+  "version": "0.1.0",
+  "description": "ScarletWitch filesystem sandbox plugin for opencode — zero-config, self-contained",
+  "type": "module",
+  "exports": {
+    ".": "./src/server.ts",
+    "./tui": "./src/tui.tsx"
+  },
+  "scripts": {
+    "postinstall": "bash scripts/postinstall.sh"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "latest",
+    "diff": "^7.0.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/sdk": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^8.0.0",
+    "@types/node": "^25.6.0"
+  }
+}
