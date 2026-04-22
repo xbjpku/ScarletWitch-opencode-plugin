@@ -51,7 +51,7 @@ That's it. The plugin auto-detects the bundled supervisor, preload library, and 
 
 ## Whitelist
 
-Edit `scarletwitch/whitelist.conf` to control which paths are writable without COW and which are unreadable:
+Edit `scarletwitch/whitelist.conf` to control which paths are writable without asking for permissions and which are unreadable:
 
 ```ini
 [write]
