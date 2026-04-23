@@ -29,7 +29,7 @@ cd ScarletWitch-opencode-plugin && npm install
 
 ### 3. Configure opencode
 
-**`.opencode/opencode.json`** — add server plugin:
+**`.opencode/opencode.json(c)`** — add server plugin:
 ```json
 {
   "plugin": [
