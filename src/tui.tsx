@@ -1,7 +1,7 @@
 // ScarletWitch TUI plugin — full cow dialog with two-level navigation + inline diff.
 // Matches the fork's dialog-cow.tsx functionality.
 
-import { getOptions } from "./state.js"
+import { getOptions, getCommand, clearCommands } from "./state.js"
 import { commitCowGen, discardCow, listCowEntries, hasSupervisor, type CowEntry } from "./supervisor.js"
 import { ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { createStore } from "solid-js/store"
@@ -11,7 +11,7 @@ import { createTwoFilesPatch } from "diff"
 import fs from "fs"
 import path from "path"
 
-type CowGroup = { generation: number; command: string; entries: CowEntry[] }
+type CowGroup = { cmd_id: string; command: string; entries: CowEntry[] }
 
 const LANG_MAP: Record<string, string> = {
   ".ts": "typescript", ".tsx": "typescript", ".js": "typescript", ".jsx": "typescript",
@@ -35,26 +35,35 @@ function cleanCommand(cmd: string): string {
     .replace(/^bash\s+-c\s+/, "").replace(/^sh\s+-c\s+/, "")
 }
 
-function entryHasDiff(entry: CowEntry, entries: CowEntry[]): boolean {
-  const gen = entry.generation ?? 0
+// Find the previous version's cow_path for the same file (entry that appears
+// earlier in the entries array). Falls back to the orig file on disk.
+function findPrevPath(entry: CowEntry, entries: CowEntry[]): string {
   let prev: string | null = null
   for (const e of entries) {
-    if (e.orig_path === entry.orig_path && (e.generation ?? 0) < gen) prev = e.cow_path
+    if (e === entry) break
+    if (e.orig_path === entry.orig_path) prev = e.cow_path
   }
-  const origPath = prev ?? entry.orig_path
+  return prev ?? entry.orig_path
+}
+
+function entryHasDiff(entry: CowEntry, entries: CowEntry[]): boolean {
+  const origPath = findPrevPath(entry, entries)
   if (readFileOr(origPath, "") !== readFileOr(entry.cow_path, "")) return true
   try { if (fs.statSync(origPath).mode !== fs.statSync(entry.cow_path).mode) return true } catch {}
   return false
 }
 
 function buildGroups(entries: CowEntry[]): CowGroup[] {
-  const map = new Map<number, CowGroup>()
+  const map = new Map<string, CowGroup>()
   for (const e of entries) {
-    const gen = e.generation ?? 0
-    if (!map.has(gen)) map.set(gen, { generation: gen, command: e.command || "?", entries: [] })
-    map.get(gen)!.entries.push(e)
+    const id = e.cmd_id || "unknown"
+    if (!map.has(id)) {
+      const display = getCommand(id) ?? cleanCommand(e.command ?? "?")
+      map.set(id, { cmd_id: id, command: display, entries: [] })
+    }
+    map.get(id)!.entries.push(e)
   }
-  return Array.from(map.values()).sort((a, b) => a.generation - b.generation)
+  return Array.from(map.values())
     .map(g => ({ ...g, entries: g.entries.filter(e => entryHasDiff(e, entries)) }))
     .filter(g => g.entries.length > 0)
 }
@@ -104,15 +113,7 @@ function DialogCow(props: {
   }
 
   function makeDiffForEntry(entry: CowEntry): string {
-    const gen = entry.generation ?? 0
-    let prevCowPath: string | null = null
-    for (const g of groups()) {
-      if (g.generation >= gen) break
-      for (const e of g.entries) {
-        if (e.orig_path === entry.orig_path) prevCowPath = e.cow_path
-      }
-    }
-    const origPath = prevCowPath ?? entry.orig_path
+    const origPath = findPrevPath(entry, props.entries)
     const oldContent = readFileOr(origPath, "")
     const newContent = readFileOr(entry.cow_path, "")
     if (oldContent !== newContent)
@@ -132,13 +133,20 @@ function DialogCow(props: {
     if (!g) return ""
     const entry = g.entries[store.fileCursor]
     if (!entry) return ""
-    return `${entry.generation}:${entry.orig_path}`
+    return `${entry.cmd_id}:${entry.orig_path}`
   })
 
   function commitPrefix() {
     const g = groups()
     if (g.length === 0) return
-    const maxGen = g[store.cmdCursor].generation
+    // Find max generation among entries in the selected prefix
+    let maxGen = 0
+    for (let i = 0; i <= store.cmdCursor && i < g.length; i++) {
+      for (const e of g[i].entries) {
+        const gen = e.generation ?? 0
+        if (gen > maxGen) maxGen = gen
+      }
+    }
     commitCowGen(props.sessionID, maxGen)
     discardCow(props.sessionID)
     props.onDone()
@@ -151,6 +159,30 @@ function DialogCow(props: {
     setStore("level", "file")
     setStore("fileCursor", Math.min(fileIdx, g.entries.length - 1))
     scrollToId(`cow-file-${store.cmdCursor}-${store.fileCursor}`)
+  }
+
+  // Scroll to a file entry, trying to show the diff area below it
+  function scrollToFile(cmdIdx: number, fileIdx: number) {
+    if (!scroll) return
+    const id = `cow-file-${cmdIdx}-${fileIdx}`
+    function find(parent: any): any {
+      for (const child of parent.getChildren()) {
+        if (child.id === id) return child
+        const found = find(child)
+        if (found) return found
+      }
+      return null
+    }
+    const target = find(scroll)
+    if (!target) return
+    // Scroll so the file entry is near the top, leaving room for the diff below
+    const y = target.y - scroll.y
+    const topMargin = 2
+    if (y < topMargin) {
+      scroll.scrollBy(y - topMargin)
+    } else if (y >= scroll.height - 4) {
+      scroll.scrollBy(y - topMargin)
+    }
   }
 
   useKeyboard((evt: any) => {
@@ -167,7 +199,7 @@ function DialogCow(props: {
         scrollToId(`cow-cmd-${store.cmdCursor}`)
         return
       }
-      if (evt.name === "space" || evt.name === "right" || evt.name === "l") {
+      if (evt.name === "right" || evt.name === "l") {
         evt.preventDefault(); evt.stopPropagation()
         enterFileLevel(0)
         return
@@ -194,7 +226,7 @@ function DialogCow(props: {
         evt.preventDefault(); evt.stopPropagation()
         if (store.fileCursor > 0) {
           setStore("fileCursor", store.fileCursor - 1)
-          scrollToId(`cow-file-${store.cmdCursor}-${store.fileCursor}`)
+          scrollToFile(store.cmdCursor, store.fileCursor)
         } else {
           setStore("level", "cmd")
           scrollToId(`cow-cmd-${store.cmdCursor}`)
@@ -205,7 +237,7 @@ function DialogCow(props: {
         evt.preventDefault(); evt.stopPropagation()
         if (store.fileCursor < g.entries.length - 1) {
           setStore("fileCursor", store.fileCursor + 1)
-          scrollToId(`cow-file-${store.cmdCursor}-${store.fileCursor}`)
+          scrollToFile(store.cmdCursor, store.fileCursor)
         } else if (store.cmdCursor < groupCount() - 1) {
           setStore("cmdCursor", store.cmdCursor + 1)
           setStore("level", "cmd")
@@ -213,7 +245,7 @@ function DialogCow(props: {
         }
         return
       }
-      if (evt.name === "escape" || evt.name === "left" || evt.name === "h") {
+      if (evt.name === "left" || evt.name === "h") {
         evt.preventDefault(); evt.stopPropagation()
         setStore("level", "cmd")
         scrollToId(`cow-cmd-${store.cmdCursor}`)
@@ -221,8 +253,14 @@ function DialogCow(props: {
       }
       if (evt.name === "return") {
         evt.preventDefault(); evt.stopPropagation()
-        setStore("level", "cmd")
-        scrollToId(`cow-cmd-${store.cmdCursor}`)
+        commitPrefix()
+        return
+      }
+      if (evt.name === "d") {
+        evt.preventDefault(); evt.stopPropagation()
+        discardCow(props.sessionID)
+        props.onDone()
+        props.dialog.clear()
         return
       }
       return
@@ -236,10 +274,12 @@ function DialogCow(props: {
     return n
   }
 
-  const helpText = () =>
+  const helpLine1 = () =>
     store.level === "cmd"
-      ? "↑↓:select  space:files  enter:commit  d:discard  esc:commit all"
-      : "↑↓:navigate files  esc/←:back to commands"
+      ? "↑↓:select  →:files diff  enter:commit prefix "
+      : "↑↓:select  ←:back        enter:commit prefix "
+
+  const helpLine2 = "d:discard all  esc:commit all"
 
   return (
     <box paddingLeft={2} paddingRight={2} gap={1}>
@@ -277,7 +317,7 @@ function DialogCow(props: {
                   {(entry: CowEntry, fileIdx: () => number) => {
                     const isFileCursor = () =>
                       store.level === "file" && isActiveGroup() && fileIdx() === store.fileCursor
-                    const diffKey = () => `${entry.generation}:${entry.orig_path}`
+                    const diffKey = () => `${entry.cmd_id}:${entry.orig_path}`
                     const showDiff = () => activeDiffKey() === diffKey()
                     return (
                       <box paddingLeft={4} id={`cow-file-${groupIdx()}-${fileIdx()}`}>
@@ -327,10 +367,9 @@ function DialogCow(props: {
         </For>
       </scrollbox>
 
-      <box flexDirection="row" gap={2} paddingTop={1} paddingBottom={1}>
-        <text fg={theme.textMuted}>
-          {helpText()}
-        </text>
+      <box paddingTop={1} paddingBottom={1}>
+        <text fg={theme.textMuted}>{helpLine1()}</text>
+        <text fg={theme.textMuted}>{helpLine2}</text>
       </box>
     </box>
   )

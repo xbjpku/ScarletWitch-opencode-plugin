@@ -50,6 +50,7 @@ export type CowEntry = {
   cow_path: string
   operation: string
   command: string
+  cmd_id: string
   timestamp: number
   generation: number
 }

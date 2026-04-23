@@ -14,6 +14,25 @@ export function getOptions(): ScarletWitchOptions {
   return _options
 }
 
+// callID → command text mapping, set by tool.execute.before, read by TUI
+const _cmdMap = new Map<string, string>()
+
+export function setCommand(callID: string, command: string) {
+  _cmdMap.set(callID, command)
+}
+
+export function getCommand(callID: string): string | undefined {
+  return _cmdMap.get(callID)
+}
+
+export function getCommandMap(): Map<string, string> {
+  return _cmdMap
+}
+
+export function clearCommands() {
+  _cmdMap.clear()
+}
+
 // Pending cow data, set by server event hook, consumed by TUI
 export type PendingCow = {
   sessionID: string
